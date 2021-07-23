@@ -92,7 +92,28 @@ class ModelServerScheduler(object):
         return model
 
     def put_model(self, model, put_policy=None):
-        pass
+        # model = Predictor
+        # torch-model-archiver 
+        # --model-name densenet161 
+        # --version 1.0 
+        # --model-file ./serve/examples/image_classifier/densenet_161/model.py 
+        # --serialized-file densenet161-8d451a50.pth 
+        # --export-path model_store 
+        # --extra-files ./serve/examples/image_classifier/index_to_name.json 
+        # --handler image_classifier
+
+        model_name = self.model_config["model_name"]
+        version = "1.0"
+        model_file = "./model.py" 
+        serialized_file = "" # 训练好的modelfile在哪
+        export_path = "model_store"
+        extra_files = ""
+        handler = "image_segmentor" # 根据detectron2，先尝试默认的handler
+        # 是不是每个modelscheduler只有一个model，还是说有多个。如果有多个如何区分这些model（register_task那里的model_name）
+        # torch-model-archiever只有命令行接口
+        
+        os.system("torch-model-archiver --model-name %s --version %s --model-file %s --serialized-file %s --export-path %s --handler %s" % (model_name, version, model_file, serialized_file, export_path, handler))
+
 
     def close(self):
         for thread_name, thread in self.threads.items():
