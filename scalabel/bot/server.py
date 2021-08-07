@@ -17,6 +17,7 @@ from torch.multiprocessing import Pool
 from io import BytesIO
 from PIL import Image
 import requests
+import subprocess
 
 
 class ModelServerScheduler(object):
@@ -75,7 +76,7 @@ class ModelServerScheduler(object):
         # here needs to change 
         model_name = self.tasks[f'{project_name}_{task_id}']["model"]
         image_dict = self.tasks[f'{project_name}_{task_id}']["image_dict"]
-        input_data = [image_dict[item["url"]] for item in items]
+        input_data = {"image": [image_dict[item["url"]] for item in items]}
         # 似乎torchserve只支持部署在本地（服务器），即只支持单机，不支持分布式调度
         results = requests.post(url="http://127.0.0.1:8080/predictions/%s" % model_name, data=input_data)
 
@@ -91,6 +92,7 @@ class ModelServerScheduler(object):
     def register_task(self, project_name, task_id, item_list):
         self.logger.info("RegisterTask running...")
         model_name, image_dict = self.deploy_model(self.model_config["model_name"], item_list, project_name)
+        self.logger.info("Model deployed")
 
         self.tasks[f'{project_name}_{task_id}'] = {
             "project_name": project_name,
@@ -106,41 +108,43 @@ class ModelServerScheduler(object):
         self.threads[model_request_channel] = thread
 
     def deploy_model(self, model_name, item_list, project_name):
-        NUM_WORKERS = 8
+        self.logger.info("Model deploying...")
+        NUM_WORKERS = 1
 
         image_dict = {}
 
         def load_inputs(item_list: List, num_workers: int) -> None:
-            def url_to_img(url):
-                img_response = requests.get(url)
-                return img_response
-
             urls = [item["urls"]["-1"] for item in item_list]
             if num_workers > 1:
                 pool = Pool(num_workers)
                 image_list = list(pool.starmap(url_to_img, urls))
             else:
-                image_list = [url_to_img(url) for url in urls]
+                image_list = [url_to_img(url, self.logger) for url in urls]
 
             for url, image in zip(urls, image_list):
                 image_dict[url] = image
 
         load_inputs(item_list, NUM_WORKERS)
+        self.logger.info("Inputs loaded")
         
-        model_id = model_name + " " + project_name
+        model_id = project_name
         export_path = "model_store"
-        handler = "./handlers.py"
+        if not os.path.exists(export_path):
+            os.mkdir(export_path)
+        handler = os.getcwd() + "/scalabel/bot/handlers.py"
         
         torch_archive_cmd = "torch-model-archiver --model-name %s\
+                                --version 1.0 \
                                 --export-path %s \
                                 --handler %s" \
-                                % (model_name, export_path, handler)
-        ts_start_cmd = "torchserve --start --ncs --model-store %s --models %s.mar" \
+                                % (model_id, export_path, handler)
+        ts_start_cmd = "torchserve --start --ncs --model-store=%s --models=%s.mar" \
                         % (export_path, model_id)
 
         os.system(torch_archive_cmd)
         self.logger.info("Model archived.")
-        os.system(ts_start_cmd)
+        # os.system(ts_start_cmd)
+        subprocess.Popen(list(ts_start_cmd.split(' ')), stdout=subprocess.PIPE)
         self.logger.info("Torchserve started.")
 
         return model_id, image_dict
@@ -148,6 +152,19 @@ class ModelServerScheduler(object):
     def close(self):
         for thread_name, thread in self.threads.items():
             thread.stop()
+
+    def __del__(self):
+        self.logger.info("Desconstructor running...")
+        ts_stop_cmd = "torchserve --stop"
+        os.system(ts_stop_cmd)
+        for thread_name, thread in self.threads.items():
+            thread.stop()
+
+
+def url_to_img(url, logger):
+    logger.info("URL to image called")
+    img_response = requests.get(url)
+    return img_response
 
 
 def launch() -> None:
@@ -167,11 +184,18 @@ def launch() -> None:
     }
 
     scheduler = ModelServerScheduler(server_config, model_config, logger)
+    """
+    with open("../../examples/image_list.json") as f:
+        string = f.read()
+        item_list = json.loads(string, encoding='utf-8')
+        
+    scheduler.deploy_model(scheduler.model_config["model_name"], item_list, "test_project")
+    """
     scheduler.listen()
     logger.info("Model server launched.")
 
 
 if __name__ == "__main__":
-    os.environ["CUDA_VISIBLE_DEVICES"] = "1"
+    os.environ["CUDA_VISIBLE_DEVICES"] = "0"
     mp.set_start_method("spawn")
     launch()

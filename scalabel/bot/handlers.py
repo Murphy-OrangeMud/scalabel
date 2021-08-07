@@ -46,6 +46,7 @@ class Detectron2Handler:
         cfg.merge_from_file(model_zoo.get_config_file(cfg_path))
         # NOTE: you may customize cfg settings
         # cfg.MODEL.DEVICE="cuda" # use gpu by default
+        cfg.MODEL.DEVICE="cpu"
         cfg.MODEL.ROI_HEADS.SCORE_THRESH_TEST = 0.5
         # Find a model from detectron2's model zoo. You can use the https://dl.fbaipublicfiles... url as well
         # you can also give a path to you checkpoint
@@ -84,7 +85,7 @@ class Detectron2Handler:
     def preprocess(self, data):
         # data: List of Bytes representing pictures
         images = []
-        for item in data:
+        for item in data["image"]:
             img = np.array(Image.open(BytesIO(item.content)))
             height, width = img.shape[:2]
             img = self.aug.get_transform(img).apply_image(img)
