@@ -36,6 +36,13 @@ RUN python3.8 -m pip install --upgrade pip && \
 
 RUN npm install -g npm@latest && npm install --max_old_space_size=8000
 
+# detectron2
+RUN git clone https://github.com/facebookresearch/detectron2.git && \ 
+    python3.8 -m pip install -e detectron2 \
+    rm -rf detectron2
+
+# soft link python
+RUN rm -f /usr/bin/python && ln -s /usr/bin/python3.8 /usr/bin/python
 
 RUN ./node_modules/.bin/webpack --config webpack.config.js --mode=production; \
     rm -f app/dist/tsconfig.tsbuildinfo
