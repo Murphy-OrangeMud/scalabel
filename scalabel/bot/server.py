@@ -78,6 +78,7 @@ class ModelServerScheduler(object):
         image_dict = self.tasks[f'{project_name}_{task_id}']["image_dict"]
         input_data = {"image": [image_dict[item["url"]] for item in items]}
         # 似乎torchserve只支持部署在本地（服务器），即只支持单机，不支持分布式调度
+        self.logger.info(f"Preparing to request the results with {input_data}.")
         results = requests.post(url="http://127.0.0.1:8080/predictions/%s" % model_name, data=input_data)
 
         pred_boxes: List[List[float]] = []

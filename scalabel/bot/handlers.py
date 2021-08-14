@@ -34,11 +34,11 @@ class Detectron2Handler:
         self.manifest = context.manifest
 
         model_dir = properties.get("model_dir")
-        serialized_file = self.manifest["model"]["serializedFile"]
-        model_pt_path = os.path.join(model_dir, serialized_file)
-
-        if not os.path.isfile(model_pt_path):
-            raise RuntimeError("Missing the model.pt file")
+        if "serializedFile" in self.manifest["model"]:
+            serialized_file = self.manifest["model"]["serializedFile"]
+            model_pt_path = os.path.join(model_dir, serialized_file)
+            if not os.path.isfile(model_pt_path):
+                raise RuntimeError("Missing the model.pt file")
 
         model_name = self.manifest["model"]["modelName"]
         cfg_path = model_name.split(".")[0] + ".yaml"
