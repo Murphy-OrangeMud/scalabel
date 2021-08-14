@@ -7,6 +7,7 @@ joblib
 motmetrics
 mypy
 numpy
+openjdk-11-jdk
 pandas
 Pillow
 plyfile
@@ -31,4 +32,5 @@ torch>=1.4.0
 torchvision>=0.5.0
 tqdm
 toml
+wget
 wheel

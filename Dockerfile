@@ -43,5 +43,10 @@ RUN git clone https://github.com/facebookresearch/detectron2.git && \
 # soft link python
 RUN rm -f /usr/bin/python && ln -s /usr/bin/python3.8 /usr/bin/python
 
+# torchserve
+RUN git clone https://github.com/pytorch/serve.git
+RUN cd serve && python ./ts_scripts/install_dependencies.py --cuda=cu111
+RUN python3.8 -m pip install torchserve torch-model-archiver torch-workflow-archiver
+
 RUN ./node_modules/.bin/webpack --config webpack.config.js --mode=production; \
     rm -f app/dist/tsconfig.tsbuildinfo
