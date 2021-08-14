@@ -37,7 +37,7 @@ RUN python3.8 -m pip install --upgrade pip && \
 
 # torchserve
 RUN git clone https://github.com/pytorch/serve.git
-RUN cd serve && python ./ts_scripts/install_dependencies.py --cuda=cu111
+RUN cd serve && python3.8 ./ts_scripts/install_dependencies.py --cuda=cu111
 RUN python3.8 -m pip install torchserve torch-model-archiver torch-workflow-archiver
 
 RUN npm install -g npm@latest && npm install --max_old_space_size=8000
