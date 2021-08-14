@@ -7,7 +7,6 @@ joblib
 motmetrics
 mypy
 numpy
-openjdk-11-jdk
 pandas
 Pillow
 plyfile
