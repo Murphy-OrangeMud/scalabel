@@ -79,7 +79,7 @@ class ModelServerScheduler(object):
         input_data = {"image": [image_dict[item["url"]] for item in items]}
         # 似乎torchserve只支持部署在本地（服务器），即只支持单机，不支持分布式调度
         self.logger.info(f"Preparing to request the results with {input_data}.")
-        results = requests.post(url="http://127.0.0.1:8080/predictions/%s" % model_name, data=input_data)
+        results = requests.post(url="http://127.0.0.1:8080/predictions/%s" % model_name, data=input_data).json()
 
         pred_boxes: List[List[float]] = []
         for box in results[0]["instances"].pred_boxes:
@@ -126,9 +126,13 @@ class ModelServerScheduler(object):
                 image_dict[url] = image
 
         load_inputs(item_list, NUM_WORKERS)
+        
+        for url, image in image_dict:
+            self.logger.info(image.content)
+
         self.logger.info("Inputs loaded")
         
-        model_id = f"{model_name}_{project_name}_{task_id}"
+        model_id = f"{project_name}_{task_id}"
         export_path = "model_store"
         if not os.path.exists(export_path):
             os.mkdir(export_path)
@@ -185,13 +189,6 @@ def launch() -> None:
     }
 
     scheduler = ModelServerScheduler(server_config, model_config, logger)
-    """
-    with open("../../examples/image_list.json") as f:
-        string = f.read()
-        item_list = json.loads(string, encoding='utf-8')
-        
-    scheduler.deploy_model(scheduler.model_config["model_name"], item_list, "test_project")
-    """
     scheduler.listen()
     logger.info("Model server launched.")
 
