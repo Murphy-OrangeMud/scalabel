@@ -126,9 +126,6 @@ class ModelServerScheduler(object):
                 image_dict[url] = image
 
         load_inputs(item_list, NUM_WORKERS)
-        
-        for url, image in image_dict:
-            self.logger.info(image.content)
 
         self.logger.info("Inputs loaded")
         
