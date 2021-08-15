@@ -92,7 +92,7 @@ class ModelServerScheduler(object):
     # 假定每个register的task用的model不是同一个
     def register_task(self, project_name, task_id, item_list):
         self.logger.info("RegisterTask running...")
-        model_name, image_dict = self.deploy_model(self.model_config["model_name"], item_list, project_name)
+        model_name, image_dict = self.deploy_model(self.model_config["model_name"], item_list, project_name, task_id)
         self.logger.info("Model deployed")
 
         self.tasks[f'{project_name}_{task_id}'] = {
@@ -108,7 +108,7 @@ class ModelServerScheduler(object):
         thread = model_request_subscriber.run_in_thread(sleep_time=0.001)
         self.threads[model_request_channel] = thread
 
-    def deploy_model(self, model_name, item_list, project_name):
+    def deploy_model(self, model_name, item_list, project_name, task_id):
         self.logger.info("Model deploying...")
         NUM_WORKERS = 1
 
@@ -128,7 +128,7 @@ class ModelServerScheduler(object):
         load_inputs(item_list, NUM_WORKERS)
         self.logger.info("Inputs loaded")
         
-        model_id = project_name
+        model_id = f"{model_name}_{project_name}_{task_id}"
         export_path = "model_store"
         if not os.path.exists(export_path):
             os.mkdir(export_path)

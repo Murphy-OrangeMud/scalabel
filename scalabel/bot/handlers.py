@@ -41,7 +41,7 @@ class Detectron2Handler:
                 raise RuntimeError("Missing the model.pt file")
 
         model_name = self.manifest["model"]["modelName"]
-        cfg_path = model_name.split(".")[0] + ".yaml"
+        cfg_path = model_name.split("_")[0] + ".yaml"
         cfg = get_cfg()
         cfg.merge_from_file(model_zoo.get_config_file(cfg_path))
         # NOTE: you may customize cfg settings
