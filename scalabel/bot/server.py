@@ -80,6 +80,7 @@ class ModelServerScheduler(object):
         # 似乎torchserve只支持部署在本地（服务器），即只支持单机，不支持分布式调度
         self.logger.info(f"Preparing to request the results with {input_data}.")
         results = requests.post(url="http://127.0.0.1:8080/predictions/%s" % model_name, data=input_data).json()
+        self.logger.info(results)
 
         pred_boxes: List[List[float]] = []
         for box in results[0]["instances"].pred_boxes:
@@ -114,7 +115,7 @@ class ModelServerScheduler(object):
 
         image_dict = {}
 
-        def load_inputs(item_list: List, num_workers: int) -> None:
+        def load_inputs(item_list, num_workers):
             urls = [item["urls"]["-1"] for item in item_list]
             if num_workers > 1:
                 pool = Pool(num_workers)
