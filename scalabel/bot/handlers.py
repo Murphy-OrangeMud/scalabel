@@ -45,8 +45,7 @@ class Detectron2Handler:
         cfg = get_cfg()
         cfg.merge_from_file(model_zoo.get_config_file(cfg_path))
         # NOTE: you may customize cfg settings
-        # cfg.MODEL.DEVICE="cuda" # use gpu by default
-        cfg.MODEL.DEVICE="cpu"
+        cfg.MODEL.DEVICE="cuda" # use gpu by default
         cfg.MODEL.ROI_HEADS.SCORE_THRESH_TEST = 0.5
         # Find a model from detectron2's model zoo. You can use the https://dl.fbaipublicfiles... url as well
         # you can also give a path to you checkpoint
@@ -75,10 +74,7 @@ class Detectron2Handler:
         self.context = context
         metrics = self.context.metrics
 
-        data = data.get("body") or data.get("data")
-        if data is None:
-            data = data[0].get("body") or data[0].get("data")
-        results = self.inference(self.preprocess(data["image"]))
+        results = self.inference(self.preprocess(data[0]["image"]))
 
         stop_time = time.time()
         metrics.add_time("HandlerTime", round((stop_time - start_time) * 1000, 2), None, "ms")
@@ -88,7 +84,7 @@ class Detectron2Handler:
     def preprocess(self, data):
         images = []
         for item in data:
-            img = np.array(Image.open(BytesIO(item.content)))
+            img = np.array(item)
             height, width = img.shape[:2]
             img = self.aug.get_transform(img).apply_image(img)
             img = torch.as_tensor(img.astype("float32").transpose(2, 0, 1))

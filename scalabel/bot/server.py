@@ -76,10 +76,10 @@ class ModelServerScheduler(object):
         # here needs to change 
         model_name = self.tasks[f'{project_name}_{task_id}']["model"]
         image_dict = self.tasks[f'{project_name}_{task_id}']["image_dict"]
-        input_data = {"image": [image_dict[item["url"]] for item in items]}
+        input_data = {"image": [np.array(Image.open(BytesIO((image_dict[item["url"]])))).tolist() for item in items]}
         # 似乎torchserve只支持部署在本地（服务器），即只支持单机，不支持分布式调度
         self.logger.info(f"Preparing to request the results with {input_data}.")
-        results = requests.post(url="http://127.0.0.1:8080/predictions/%s" % model_name, data=input_data).json()
+        results = requests.post(url="http://127.0.0.1:8080/predictions/%s" % model_name, json=input_data).json()
         self.logger.info(results)
 
         pred_boxes: List[List[float]] = []
@@ -124,7 +124,7 @@ class ModelServerScheduler(object):
                 image_list = [url_to_img(url, self.logger) for url in urls]
 
             for url, image in zip(urls, image_list):
-                image_dict[url] = image
+                image_dict[url] = image.content
 
         load_inputs(item_list, NUM_WORKERS)
 
