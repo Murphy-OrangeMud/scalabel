@@ -74,7 +74,8 @@ class Detectron2Handler:
         self.context = context
         metrics = self.context.metrics
 
-        results = self.inference(self.preprocess(data[0]["image"]))
+        data = data[0].get("body") or data[0].get("data")
+        results = self.inference(self.preprocess(data["image"]))
 
         stop_time = time.time()
         metrics.add_time("HandlerTime", round((stop_time - start_time) * 1000, 2), None, "ms")
