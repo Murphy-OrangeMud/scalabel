@@ -1,91 +1,25 @@
+from typing import Dict, List
+
 import torch
-import ray
-from ray import serve
+import os
 import logging
 from detectron2 import model_zoo
 from detectron2.checkpoint.detection_checkpoint import DetectionCheckpointer
 from detectron2.config.config import get_cfg
 import detectron2.data.transforms as T
-from detectron2.modeling import build_model
+from detectron2.modeling.meta_arch.build import build_model
 import numpy as np
 import redis
-from typing import Dict, List
 import json
 import torch.multiprocessing as mp
 from torch.multiprocessing import Pool
+
 from io import BytesIO
 from PIL import Image
 import requests
-import os
+import subprocess
 
-ray.init(address="auto", namespace="hello")
-serve.start(detached=True)
 
-# Actor
-@ray.remote
-class Predictor:
-    # gpu_id: int, 0 or 1
-    def __init__(self, cfg_path, item_list, num_workers, logger, gpu_id):
-        cfg = get_cfg()
-        cfg.merge_from_file(model_zoo.get_config_file(cfg_path))
-        # NOTE: you may customize cfg settings
-        # cfg.MODEL.DEVICE="cuda" # use gpu by default
-        cfg.MODEL.ROI_HEADS.SCORE_THRESH_TEST = 0.5
-        # Find a model from detectron2's model zoo. You can use the https://dl.fbaipublicfiles... url as well
-        # you can also give a path to you checkpoint
-        cfg.MODEL.WEIGHTS = model_zoo.get_checkpoint_url(cfg_path)
-
-        self.cfg = cfg.clone()
-        self.model = build_model(cfg)
-        self.model.eval()
-        checkpointer = DetectionCheckpointer(self.model)
-        checkpointer.load(cfg.MODEL.WEIGHTS)
-
-        self.aug = T.ResizeShortestEdge(
-            [cfg.INPUT.MIN_SIZE_TEST, cfg.INPUT.MIN_SIZE_TEST], cfg.INPUT.MAX_SIZE_TEST
-        )
-        self.logger = logger
-
-        self.image_dict = {}
-
-        os.environ["CUDA_VISIBLE_DEVICE"] = gpu_id
-        self.load_inputs(item_list, num_workers)
-
-    @staticmethod
-    def url_to_img(url, aug, device):
-        img_response = requests.get(url)
-        img = np.array(Image.open(BytesIO(img_response.content)))
-        height, width = img.shape[:2]
-        img = aug.get_transform(img).apply_image(img)
-        img = torch.as_tensor(img.astype("float32").transpose(2, 0, 1))
-        if device == "cuda":
-            img = img.pin_memory()
-            img = img.cuda(non_blocking=True)
-        return {"image": img, "height": height, "width": width}
-
-    def load_inputs(self, item_list, num_workers):
-        urls = [item["urls"]["-1"] for item in item_list]
-        if num_workers > 1:
-            pool = Pool(num_workers)
-            image_list = list(pool.starmap(self.url_to_img,
-                                           zip(urls,
-                                               [self.aug] * len(urls),
-                                               [self.cfg.MODEL.DEVICE] * len(urls)
-                                               )))
-        else:
-            image_list = [self.url_to_img(url, self.aug, self.cfg.MODEL.DEVICE) for url in urls]
-
-        for url, image in zip(urls, image_list):
-            self.image_dict[url] = image
-
-    @ray.method
-    def predict(self, items):
-        inputs = [self.image_dict[item["url"]] for item in items]
-        with torch.no_grad():
-            predictions = self.model(inputs)
-            return predictions
-
-@serve.deployment
 class ModelServerScheduler(object):
     def __init__(self, server_config, model_config, logger):
         self.server_config = server_config
@@ -103,9 +37,11 @@ class ModelServerScheduler(object):
 
         self.logger = logger
 
+    # restore when server restarts, connects to redis channels.
     def restore(self):
         pass
 
+    # save the loaded tasks
     def save(self):
         pass
 
@@ -129,6 +65,7 @@ class ModelServerScheduler(object):
         self.logger.info(f"Set up model inference for {project_name}: {task_id}.")
 
     def request_handler(self, request_message):
+        self.logger.info("RequestHandler running...")
         request_message = json.loads(request_message["data"])
         project_name = request_message["projectName"]
         task_id = request_message["taskId"]
@@ -136,10 +73,14 @@ class ModelServerScheduler(object):
         item_indices = request_message["itemIndices"]
         action_packet_id = request_message["actionPacketId"]
 
-        model = self.tasks[f'{project_name}_{task_id}']["model"]
-
-        results = model.predict(items).remote()
-        results = ray.get(results)
+        # here needs to change 
+        model_name = self.tasks[f'{project_name}_{task_id}']["model"]
+        image_dict = self.tasks[f'{project_name}_{task_id}']["image_dict"]
+        input_data = {"image": [np.array(Image.open(BytesIO((image_dict[item["url"]])))).tolist() for item in items]}
+        # 似乎torchserve只支持部署在本地（服务器），即只支持单机，不支持分布式调度
+        # self.logger.info(f"Preparing to request the results with {input_data}.")
+        results = requests.post(url="http://127.0.0.1:8080/predictions/%s" % model_name, json=input_data).json()
+        self.logger.info(results)
 
         pred_boxes: List[List[float]] = []
         for box in results[0]["instances"].pred_boxes:
@@ -149,14 +90,17 @@ class ModelServerScheduler(object):
         model_response_channel = self.model_response_channel % (project_name, task_id)
         self.redis.publish(model_response_channel, json.dumps([pred_boxes, item_indices, action_packet_id]))
 
+    # 假定每个register的task用的model不是同一个
     def register_task(self, project_name, task_id, item_list):
-        model = self.get_model(self.model_config["model_name"], item_list)
-        self.put_model(model)
+        self.logger.info("RegisterTask running...")
+        model_name, image_dict = self.deploy_model(self.model_config["model_name"], item_list, project_name, task_id)
+        self.logger.info("Model deployed")
 
         self.tasks[f'{project_name}_{task_id}'] = {
             "project_name": project_name,
             "task_id": task_id,
-            "model": model,
+            "model": model_name,
+            "image_dict": image_dict
         }
 
         model_request_channel = self.model_request_channel % (project_name, task_id)
@@ -165,21 +109,68 @@ class ModelServerScheduler(object):
         thread = model_request_subscriber.run_in_thread(sleep_time=0.001)
         self.threads[model_request_channel] = thread
 
-    # 在171行，ray会直接把这个actor对象放到一个有gpu的node上并调用构造函数。不需要手动放。需要做的就是在构造函数里指定CUDA_VISIBLE_ENVIRONMENT
-    def get_model(self, model_name, item_list):
-        NUM_WORKERS = 8
-        model = Predictor(model_name, item_list, NUM_WORKERS, self.logger, "0").remote()
-        return model
+    def deploy_model(self, model_name, item_list, project_name, task_id):
+        self.logger.info("Model deploying...")
+        NUM_WORKERS = 1
 
-    def put_model(self, model):
-        pass
-    
+        image_dict = {}
+
+        def load_inputs(item_list, num_workers):
+            urls = [item["urls"]["-1"] for item in item_list]
+            if num_workers > 1:
+                pool = Pool(num_workers)
+                image_list = list(pool.starmap(url_to_img, urls))
+            else:
+                image_list = [url_to_img(url, self.logger) for url in urls]
+
+            for url, image in zip(urls, image_list):
+                image_dict[url] = image.content
+
+        load_inputs(item_list, NUM_WORKERS)
+
+        self.logger.info("Inputs loaded")
+        
+        model_id = f"{project_name}_{task_id}"
+        export_path = "model_store"
+        if not os.path.exists(export_path):
+            os.mkdir(export_path)
+        handler = os.getcwd() + "/scalabel/bot/handlers.py"
+        
+        torch_archive_cmd = "torch-model-archiver --model-name %s\
+                                --version 1.0 \
+                                --export-path %s \
+                                --handler %s" \
+                                % (model_id, export_path, handler)
+        ts_start_cmd = "torchserve --start --ncs --model-store=%s --models=%s.mar" \
+                        % (export_path, model_id)
+
+        os.system(torch_archive_cmd)
+        self.logger.info("Model archived.")
+        # os.system(ts_start_cmd)
+        subprocess.Popen(list(ts_start_cmd.split(' ')), stdout=subprocess.PIPE)
+        self.logger.info("Torchserve started.")
+
+        return model_id, image_dict
+
     def close(self):
         for thread_name, thread in self.threads.items():
             thread.stop()
 
+    def __del__(self):
+        self.logger.info("Desconstructor running...")
+        ts_stop_cmd = "torchserve --stop"
+        os.system(ts_stop_cmd)
+        for thread_name, thread in self.threads.items():
+            thread.stop()
 
-def launch():
+
+def url_to_img(url, logger):
+    logger.info("URL to image called")
+    img_response = requests.get(url)
+    return img_response
+
+
+def launch() -> None:
     """Launch processes."""
     log_f = "[%(asctime)-15s %(filename)s:%(lineno)d %(funcName)s] %(message)s"
     logging.basicConfig(format=log_f)
@@ -201,5 +192,6 @@ def launch():
 
 
 if __name__ == "__main__":
+    os.environ["CUDA_VISIBLE_DEVICES"] = "0"
     mp.set_start_method("spawn")
     launch()
