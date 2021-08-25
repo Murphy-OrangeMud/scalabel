@@ -23,6 +23,9 @@ PyWavelets
 PyYAML
 requests
 redis
+ray
+ray[default]
+ray[serve]
 scikit-image
 scipy
 setuptools

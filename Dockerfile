@@ -15,8 +15,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3.8 \
     python3.8-dev \
     python3-pip \
-    python3-setuptools \
-    openjdk-11-jdk
+    python3-setuptools
+    # openjdk-11-jdk
 
 # Latest redis source
 RUN add-apt-repository ppa:chris-lea/redis-server
@@ -36,9 +36,9 @@ RUN python3.8 -m pip install --upgrade pip && \
     python3.8 -m pip install -r scripts/requirements.txt
 
 # torchserve
-RUN git clone https://github.com/pytorch/serve.git
-RUN cd serve && python3.8 ./ts_scripts/install_dependencies.py --cuda=cu111
-RUN python3.8 -m pip install torchserve torch-model-archiver torch-workflow-archiver
+# RUN git clone https://github.com/pytorch/serve.git
+# RUN cd serve && python3.8 ./ts_scripts/install_dependencies.py --cuda=cu111
+# RUN python3.8 -m pip install torchserve torch-model-archiver torch-workflow-archiver
 
 RUN npm install -g npm@latest && npm install --max_old_space_size=8000
 

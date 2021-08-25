@@ -15,7 +15,6 @@ import torch.multiprocessing as mp
 from torch.multiprocessing import Pool
 from io import BytesIO
 from PIL import Image
-import requests
 import os
 
 ray.init(address="auto", namespace="hello")
