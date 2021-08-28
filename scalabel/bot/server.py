@@ -77,7 +77,6 @@ class Predictor:
         for url, image in zip(urls, image_list):
             self.image_dict[url] = image
 
-    @ray.method
     def predict(self, items):
         inputs = [self.image_dict[item["url"]] for item in items]
         with torch.no_grad():
