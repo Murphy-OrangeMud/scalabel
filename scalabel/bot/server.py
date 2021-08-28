@@ -100,6 +100,8 @@ class ModelServerScheduler(object):
         self.threads = {}
 
         self.logger = logger
+        
+        self.listen()
 
     def restore(self):
         pass
@@ -193,8 +195,7 @@ def launch():
         "model_name": "COCO-Detection/faster_rcnn_R_50_FPN_3x.yaml"
     }
 
-    scheduler = ModelServerScheduler(server_config, model_config, logger)
-    scheduler.listen()
+    ModelServerScheduler.deploy(server_config, model_config, logger)
     logger.info("Model server launched.")
 
 
