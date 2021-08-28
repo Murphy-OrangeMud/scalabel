@@ -137,7 +137,7 @@ class ModelServerScheduler(object):
 
         model = self.tasks[f'{project_name}_{task_id}']["model"]
 
-        results = model.predict(items).remote()
+        results = model.predict.remote(items)
         results = ray.get(results)
 
         pred_boxes: List[List[float]] = []
