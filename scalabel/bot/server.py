@@ -167,7 +167,7 @@ class ModelServerScheduler(object):
     # 在171行，ray会直接把这个actor对象放到一个有gpu的node上并调用构造函数。不需要手动放。需要做的就是在构造函数里指定CUDA_VISIBLE_ENVIRONMENT
     def get_model(self, model_name, item_list):
         NUM_WORKERS = 8
-        model = Predictor(model_name, item_list, NUM_WORKERS, self.logger, "0").remote()
+        model = Predictor.remote(model_name, item_list, NUM_WORKERS, self.logger, "0")
         return model
 
     def put_model(self, model):
