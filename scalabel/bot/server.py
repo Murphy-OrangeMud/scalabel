@@ -106,10 +106,7 @@ class ModelServerScheduler(object):
         self.threads = {}
 
         self.logger = logger
-<<<<<<< HEAD
         
-=======
->>>>>>> run demo
         self.listen()
 
     def restore(self):
