@@ -1,42 +1,40 @@
-import torch
+from functools import total_ordering
 import ray
 from ray import serve
 import logging
-from detectron2 import model_zoo
-from detectron2.checkpoint.detection_checkpoint import DetectionCheckpointer
-from detectron2.config.config import get_cfg
-import detectron2.data.transforms as T
-from detectron2.modeling import build_model
 import numpy as np
 import redis
-from typing import Dict, List
-import json
-import torch.multiprocessing as mp
-from torch.multiprocessing import Pool
 from io import BytesIO
 from PIL import Image
 import os
 import requests
+import time
+from typing import Dict, List
+import json
+
+import torch
+import torch.multiprocessing as mp
+from torch.multiprocessing import Pool
+
+from detectron2 import model_zoo
+from detectron2.checkpoint.detection_checkpoint import DetectionCheckpointer
+from detectron2.config.config import get_cfg
+import detectron2.data.transforms as T
+import detectron2.utils.comm as comm
+from detectron2.utils.events import EventStorage, get_event_storage
+from detectron2.modeling import build_model
+from detectron2.solver import build_optimizer, build_lr_scheduler
 
 ray.init(address="auto", namespace="hello")
 serve.start(detached=True)
 
-def url_to_img(url, aug, device):
-    img_response = requests.get(url)
-    img = np.array(Image.open(BytesIO(img_response.content)))
-    height, width = img.shape[:2]
-    img = aug.get_transform(img).apply_image(img)
-    img = torch.as_tensor(img.astype("float32").transpose(2, 0, 1))
-    if device == "cuda":
-        img = img.pin_memory()
-        img = img.cuda(non_blocking=True)
-    return {"image": img, "height": height, "width": width}
-
 # Actor
+# TODO: 是否先把每个label暂存起来，等找到了足够多的label之后再进行一次训练
 @ray.remote
-class Predictor:
+class ModelDriver:
     # gpu_id: int, 0 or 1
-    def __init__(self, cfg_path, item_list, num_workers, logger, gpu_id):
+    # max_iter: 
+    def __init__(self, cfg_path, item_list, num_workers, logger, gpu_id, max_iter):
         cfg = get_cfg()
         cfg.merge_from_file(model_zoo.get_config_file(cfg_path))
         # NOTE: you may customize cfg settings
@@ -50,9 +48,15 @@ class Predictor:
 
         self.cfg = cfg.clone()
         self.model = build_model(cfg)
-        self.model.eval()
-        checkpointer = DetectionCheckpointer(self.model)
-        checkpointer.load(cfg.MODEL.WEIGHTS)
+        self.optimizer = build_optimizer(cfg, self.model)
+        self.training_cfg = {
+            "iter": 0,
+            "start_iter": 0,
+            "max_iter": max_iter
+        }
+        
+        self.checkpointer = DetectionCheckpointer(self.model)
+        self.checkpointer.load(cfg.MODEL.WEIGHTS)
 
         self.aug = T.ResizeShortestEdge(
             [cfg.INPUT.MIN_SIZE_TEST, cfg.INPUT.MIN_SIZE_TEST], cfg.INPUT.MAX_SIZE_TEST
@@ -67,18 +71,19 @@ class Predictor:
         urls = [item["urls"]["-1"] for item in item_list]
         if num_workers > 1:
             pool = Pool(num_workers)
-            image_list = list(pool.starmap(url_to_img,
+            image_list = list(pool.starmap(ModelDriver.url_to_img,
                                            zip(urls,
                                                [self.aug] * len(urls),
                                                [self.cfg.MODEL.DEVICE] * len(urls)
                                                )))
         else:
-            image_list = [url_to_img(url, self.aug, self.cfg.MODEL.DEVICE) for url in urls]
+            image_list = [ModelDriver.url_to_img(url, self.aug, self.cfg.MODEL.DEVICE) for url in urls]
 
         for url, image in zip(urls, image_list):
             self.image_dict[url] = image
 
     def predict(self, items):
+        self.model.eval()
         inputs = [self.image_dict[item["url"]] for item in items]
         with torch.no_grad():
             predictions = self.model(inputs)
@@ -88,6 +93,73 @@ class Predictor:
                 box = box.cpu().numpy()
                 pred_boxes.append(box.tolist())
             return pred_boxes
+
+    def train_step(self, items):
+        self.model.train()
+        start = time.perf_counter()
+
+        # TODO: to be revised, unknown format
+        data = self.process_data(items)
+        
+        loss_dict = self.model(data)
+        if isinstance(loss_dict, torch.Tensor):
+            losses = loss_dict
+            loss_dict = {"total_loss": loss_dict}
+        else:
+            losses = sum(loss_dict.values())
+
+        self.optimizer.zero_grad()
+        losses.backward()
+
+        training_time = time.perf_counter() - start
+
+        ModelDriver.write_metrics(loss_dict, training_time)
+        self.optimizer.step()
+
+    @staticmethod
+    def write_metrics(loss_dict, training_time, prefix):
+        metrics_dict = {k: v.detach().cpu().item() for k, v in loss_dict.items()}
+        metrics_dict["training_time"] = training_time
+        
+        all_metrics_dict = comm.gather(metrics_dict)
+
+        if comm.is_main_process():
+            storage = get_event_storage()
+
+            training_time = np.max([x.pop("training_time") for x in all_metrics_dict])
+            storage.put_scalar("training_time", training_time)
+
+            metrics_dict = {
+                k: np.mean([x[k] for x in all_metrics_dict]) for k in all_metrics_dict[0].keys()
+            }
+            total_losses_reduced = sum(metrics_dict.values())
+            if not np.isfinite(total_losses_reduced):
+                raise FloatingPointError(
+                    f"Loss became infinite or NaN at iteration = {storage.iter}!\n"
+                    f"loss_dict = {metrics_dict}"
+                )
+
+            storage.put_scalar("{}total_loss".format(prefix), total_losses_reduced)
+            if len(metrics_dict) > 1:
+                storage.put_scalars(**metrics_dict)
+
+    @staticmethod
+    def url_to_img(url, aug, device):
+        img_response = requests.get(url)
+        img = np.array(Image.open(BytesIO(img_response.content)))
+        height, width = img.shape[:2]
+        img = aug.get_transform(img).apply_image(img)
+        img = torch.as_tensor(img.astype("float32").transpose(2, 0, 1))
+        if device == "cuda":
+            img = img.pin_memory()
+            img = img.cuda(non_blocking=True)
+        return {"image": img, "height": height, "width": width}
+
+    def save_model(self):
+        pass
+
+    def resume_model(self):
+        self.checkpointer.resume_or_load(self.cfg.MODEL.WEIGHTS, True)
 
 @serve.deployment(num_replicas=1)
 class ModelServerScheduler(object):
@@ -131,10 +203,8 @@ class ModelServerScheduler(object):
         self.register_task(project_name, task_id, item_list)
 
         self.logger.info(f"Set up model inference for {project_name}: {task_id}.")
-        print(f"Set up model inference for {project_name}: {task_id}.")
 
     def request_handler(self, request_message):
-        print("REquest handler")
         request_message = json.loads(request_message["data"])
         project_name = request_message["projectName"]
         task_id = request_message["taskId"]
@@ -144,8 +214,11 @@ class ModelServerScheduler(object):
 
         model = self.tasks[f'{project_name}_{task_id}']["model"]
 
+        start_time = time.time()
         results = model.predict.remote(items)
         results = ray.get(results, timeout=300)
+        end_time = time.time()
+        print("PREDICTION TIME: ", end_time - start_time)
 
         model_response_channel = self.model_response_channel % (project_name, task_id)
         self.redis.publish(model_response_channel, json.dumps([results, item_indices, action_packet_id]))
@@ -166,10 +239,12 @@ class ModelServerScheduler(object):
         thread = model_request_subscriber.run_in_thread(sleep_time=0.001)
         self.threads[model_request_channel] = thread
 
+        # model_train_channel = 
+
     # 在171行，ray会直接把这个actor对象放到一个有gpu的node上并调用构造函数。不需要手动放。需要做的就是在构造函数里指定CUDA_VISIBLE_ENVIRONMENT
     def get_model(self, model_name, item_list):
         NUM_WORKERS = 1
-        model = Predictor.remote(model_name, item_list, NUM_WORKERS, self.logger, "1")
+        model = ModelDriver.remote(model_name, item_list, NUM_WORKERS, self.logger, "1")
         return model
 
     def put_model(self, model):

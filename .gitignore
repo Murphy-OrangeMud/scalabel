@@ -68,3 +68,6 @@ doc/media
 build/
 dist/
 scalabel.egg-info
+
+# detectron
+detectron2/
